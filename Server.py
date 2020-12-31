@@ -6,17 +6,26 @@ import time
 import struct
 
 global to_listen
+BROADCAST = '<172.1.255.255>'
+CPINK = '\33[91m'
+CEND = '\33[0m'
+PACKET_FORMAT = 'Ibh'
+TCP_PORT_NUM = 2053
+UDP_PORT_NUM = 13117
+BUFFER_SIZE = 1024
+CGREEN = '\33[92m'
 
 
 class Server:
     def __init__(self):
-        self.all_clients = {}
+        #initiolize the server , opens a thread for sending UDP messages
+        self.all_clients = {} #connected clients
         self.init_thread = threading.Thread(target=self.send_in_broadcast)
         self.init_thread.start()
 
 
     def send_in_broadcast(self):
-        BROADCAST = '<172.1.255.255>'
+
         global to_listen
         to_listen = True
         listen_thread = threading.Thread(target=self.server_listen)
@@ -24,37 +33,33 @@ class Server:
         PORT_NUM = 2053
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        CPINK = '\33[91m'
-        CEND = '\33[0m'
         print(CPINK + 'Server started,listening on IP address', socket.gethostbyname(socket.gethostname()) + CEND)
         global dead
         dead = False
-        message = struct.pack('Ibh', 0xfeedbeef, 0x2, PORT_NUM)
+        message = struct.pack(PACKET_FORMAT, 0xfeedbeef, 0x2, PORT_NUM)
         while not dead:
-            server.sendto(message, (BROADCAST, 13117))
+            server.sendto(message, (BROADCAST, UDP_PORT_NUM))
             time.sleep(1)
 
 
     def server_listen(self):
-        PORT_NUM = 2053
+        # server listen to TCP_PORT_NUM
         threading.Timer(10, self.play,).start()
         self.all_clients = {}
         while to_listen:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("", PORT_NUM))
+            s.bind(("", TCP_PORT_NUM))
             s.listen()
             try:
                 s.settimeout(1)
                 connection, client_address = s.accept()
-
             except:
                 continue
             thread = threading.Thread(target=self.serve, args=(connection,))
             thread.start()
 
     def serve(self,connection):
-        BUFFER_SIZE = 1024
         team_name = connection.recv(BUFFER_SIZE)
         self.all_clients[connection] = (team_name, random.choice([1, 2]))
 
@@ -63,12 +68,11 @@ class Server:
         global to_listen
         to_listen = False
         global dead
-        dead = True
-        if not self.all_clients:
+        dead = True # stops broadcasting and listening
+        if not self.all_clients: #empty game - return to listen and broadcast
             time.sleep(3)
             threading.Thread(target=self.send_in_broadcast).start()
             return
-
 
         group1 = []
         group2 = []
@@ -80,7 +84,6 @@ class Server:
                 group1.append(self.all_clients[connection][0])
             else:
                 group2.append(self.all_clients[connection][0])
-
 
         msg += 'Group 1:\n==\n'
         group1_names = ''
@@ -99,18 +102,20 @@ class Server:
         for connection in self.all_clients.keys():
             connection.send(msg.encode())
 
-        list_of_futures1 = []
-        list_of_futures2 = []
+        # start operating the game - using futures to collect clients scores
+        futures_of_team1 = []
+        futures_of_team2 = []
         with concurrent.futures.ThreadPoolExecutor() as executor:
             for connection in self.all_clients.keys():
                 future = executor.submit(self.start_new_game, connection)
                 if self.all_clients[connection][1]  ==1:
-                    list_of_futures1.append(future)
+                    futures_of_team1.append(future)
                 else:
-                    list_of_futures2.append(future)
+                    futures_of_team2.append(future)
 
-        result_team1 = sum([res.result() for res in list_of_futures1])
-        result_team2 = sum([res.result() for res in list_of_futures2])
+        result_team1 = sum([res.result() for res in futures_of_team1])
+        result_team2 = sum([res.result() for res in futures_of_team2])
+
         if result_team1 > result_team2:
             winner = 1
             win_group = group1_names
@@ -125,8 +130,7 @@ class Server:
         game_over = 'Game over!\nGroup 1 typed in ' + str(result_team1) + ' characters. Group 2 typed in ' + str(
             result_team2) + ' characters.\n'
 
-        CGREEN = '\33[92m'
-        CEND = '\33[0m'
+
         game_over_msg = CGREEN + game_over + win_msg + CEND
 
         for client in self.all_clients.keys():
@@ -137,8 +141,6 @@ class Server:
             except:
                 continue
 
-        CPINK = '\33[91m'
-        CEND = '\33[0m'
         print(CPINK + '\nGame over, sending out offer requests...' + CEND)
         time.sleep(2)
         threading.Thread(target=self.send_in_broadcast).start()
@@ -149,11 +151,14 @@ class Server:
         start_time = time.time()
         while time.time() - start_time < 10:
             try:
-                connection.recv(15).decode()
+                connection.recv(BUFFER_SIZE).decode()
                 char_counter += 1
 
             except:
                 pass
         return char_counter
+
+if __name__ == '__main__':
+    server = Server()
 
 
